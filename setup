@@ -3,3 +3,9 @@
 # Setting Up
 echo "setting up"
 git clone https://github.com/isam-ahmed0/LEO-VM.git
+
+# Install LEO-VM manager
+echo "Installing LEO-VM manager...."
+sudo apt install qemu-system cloud-image-utils wget openssl -y
+echo "# Done"
+
