@@ -1,0 +1,5 @@
+#!/bin/bash
+
+# Setting Up
+echo "setting up"
+git clone https://github.com/isam-ahmed0/vms.git
