@@ -10,7 +10,7 @@ set -euo pipefail
 API_KEY_FILE="$HOME/.leo_ai_key"
 VM_DIR="${VM_DIR:-$HOME/vms}"
 HISTORY_FILE="/tmp/leo_chat_history.json"
-MODEL="gemini-2.5-pro-latest" # Using 1.5 Pro (High capability)
+MODEL="gemini-2.5-pro" # Using 1.5 Pro (High capability)
 
 # Colors
 RED='\033[0;31m'
@@ -149,7 +149,7 @@ chat_with_leo() {
     echo -e "${PURPLE}LEO is thinking...${NC}"
 
     # 2. Call Gemini API
-    local response=$(curl -s -X POST "https://generativelanguage.googleapis.com/v1beta/models/$MODEL:generateContent?key=$GEMINI_API_KEY" \
+    local response=$(curl -s -X POST "https://generativelanguage.googleapis.com/models/$MODEL:generateContent?key=$GEMINI_API_KEY" \
         -H "Content-Type: application/json" \
         -d @$HISTORY_FILE)
 
