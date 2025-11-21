@@ -1,16 +1,20 @@
 #!/bin/bash
-set -euo pipefail
-
 # =================================================
 # LEO AI - The Intelligent Terminal Assistant
 # Powered by Gemini Pro | Variant of vm.sh
+# Feature: AUTO-MEMORY & VM Management
 # =================================================
 
 # Configuration
 API_KEY_FILE="$HOME/.leo_ai_key"
 VM_DIR="${VM_DIR:-$HOME/vms}"
 HISTORY_FILE="/tmp/leo_chat_history.json"
-MODEL="gemini-2.5-pro" # Using 1.5 Pro (High capability)
+MEMORY_FILE="$HOME/.leo_memory.txt"
+VM_SCRIPT="./vm.sh"
+
+# === USER CONFIGURATION ===
+MODEL="gemini-2.5-pro"
+API_URL="https://generativelanguage.googleapis.com/v1/models"
 
 # Colors
 RED='\033[0;31m'
@@ -19,11 +23,31 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 YELLOW='\033[1;33m'
 PURPLE='\033[0;35m'
+GRAY='\033[0;90m'
 NC='\033[0m' # No Color
 
 # =============================
-# Initialization & Helpers
+# Library Loading
 # =============================
+load_vm_functions() {
+    if [ -f "$VM_SCRIPT" ]; then
+        sed '$d' "$VM_SCRIPT" > /tmp/leo_vm_lib.sh
+        set +e
+        source /tmp/leo_vm_lib.sh 2>/dev/null
+        set -e
+        trap 'rm -f "$HISTORY_FILE" /tmp/leo_vm_lib.sh; echo -e "\n${BLUE}LEO Shutting down...${NC}"; exit 0' SIGINT SIGTERM EXIT
+    else
+        echo -e "${RED}[WARN] vm.sh not found. VM management features disabled.${NC}"
+    fi
+}
+
+# =============================
+# Helpers
+# =============================
+
+get_time() {
+    date +"%H:%M:%S"
+}
 
 display_header() {
     clear
@@ -34,24 +58,13 @@ display_header() {
 888     888C8   C8888 8888D 
 888  ,d 888 ",d  Y888 888P  
 888,d88 888,d88   "88 88"
-                                     
-        BY ISAM AHMED
+
+      BY ISAM AHMED
 ========================================================================
 EOF
-    echo -e "${CYAN}Powered by Google Gemini Pro${NC}"
-    echo -e "${BLUE}Type 'exit', 'quit', or 'bye' to leave.${NC}"
+    echo -e "${CYAN}Powered by Google Gemini Pro ($MODEL)${NC}"
+    echo -e "${BLUE}Type 'exit' to leave. Type 'mem' to view memory.${NC}"
     echo "------------------------------------------------------------------------"
-}
-
-check_deps() {
-    local deps=("curl" "jq")
-    for dep in "${deps[@]}"; do
-        if ! command -v "$dep" &> /dev/null; then
-            echo -e "${RED}[ERROR] Missing dependency: $dep${NC}"
-            echo "Please install it: sudo apt install $dep"
-            exit 1
-        fi
-    done
 }
 
 get_api_key() {
@@ -60,7 +73,6 @@ get_api_key() {
     else
         echo -e "${YELLOW}Welcome to LEO AI.${NC}"
         echo -e "To function, I need a Google Gemini API Key."
-        echo "Get one here: https://aistudio.google.com/app/apikey"
         read -p "Enter your API Key: " GEMINI_API_KEY
         if [ -z "$GEMINI_API_KEY" ]; then
             echo -e "${RED}API Key is required.${NC}"
@@ -74,134 +86,161 @@ get_api_key() {
 }
 
 # =============================
-# Context Gathering
+# AI Context & Auto-Memory Logic
 # =============================
 
 get_system_context() {
-    local context="You are LEO AI, a highly advanced Linux terminal assistant. 
+    local context="You are LEO AI, an advanced VM Manager Assistant with AUTO-MEMORY. 
     Current User: $(whoami)
-    Current Shell: $SHELL
-    Current Directory: $(pwd)
     
-    Your goal is to help the user manage their system, write code, fix scripts, and manage VMs.
+    CAPABILITIES:
+    1. Manage VMs (Create, Stop, Edit, Info).
+    2. LEARN from the user automatically.
     
-    KNOWLEDGE BASE - VM MANAGER (vm.sh):
-    The user has a script named 'vm.sh' in this directory (or nearby) used to manage QEMU VMs.
-    The VMs are stored in: $VM_DIR
+    IMPORTANT RULES:
+    1. **STARTING VMs**: FORBIDDEN. Reply: 'I cannot start VMs. Please type 'menu' or use ./vm.sh option 2.'
+    2. **ACTIONS**: Output specific ACTION COMMANDS alone on a new line.
+    
+    *** AUTO-MEMORY PROTOCOL ***
+    You must actively listen for user preferences, names, configurations, or specific instructions.
+    If the user mentions a fact that should be remembered for future sessions, append this tag to the end of your response:
+    >>MEMORY: [The fact to be saved]
+    
+    Example:
+    User: 'My main server IP is 192.168.1.50'
+    You: 'Understood. >>MEMORY: Main server IP is 192.168.1.50'
+    
+    ACTION COMMANDS:
+    - To create a VM:       ACTION: CREATE
+    - To stop a VM:         ACTION: STOP <vm_name>
+    - To edit config:       ACTION: EDIT <vm_name>
+    - To show info:         ACTION: INFO <vm_name>
+    
+    CURRENT VM STATUS:
     "
 
-    # List existing VMs
+    # List VMs
     if [ -d "$VM_DIR" ]; then
-        context+="\nDETECTED VIRTUAL MACHINES:\n"
         local vm_list=$(find "$VM_DIR" -name "*.conf" -exec basename {} .conf \; 2>/dev/null)
         if [ -n "$vm_list" ]; then
             for vm in $vm_list; do
-                # Read minimal config info
                 source "$VM_DIR/$vm.conf" 2>/dev/null || true
-                context+=" - Name: $vm | OS: ${OS_TYPE:-Unknown} | RAM: ${MEMORY:-Unknown} | IP/Port: $SSH_PORT\n"
-                
-                # Check if running
-                if pgrep -f "qemu-system-x86_64.*$vm" >/dev/null; then
-                    context+="   STATUS: RUNNING\n"
-                else
-                    context+="   STATUS: STOPPED\n"
-                fi
+                local status="STOPPED"
+                if pgrep -f "qemu-system-x86_64.*$vm" >/dev/null; then status="RUNNING"; fi
+                context+=" - $vm | OS: $OS_TYPE | IP/Port: $SSH_PORT | Status: $status\n"
             done
-        else
-            context+="No VMs created yet.\n"
         fi
-    else
-        context+="VM Directory ($VM_DIR) does not exist yet.\n"
     fi
 
-    context+="\nINSTRUCTIONS FOR VM MANAGEMENT:
-    1. If the user wants to START a vm advise them to use there menu command becuz there has 2-3 menu commands specific by theres vps functions.
-    2. Specifically, tell them: 'Run ./vm.sh and choose option 2 to start your VM.'
-    3. Do NOT try to run raw qemu commands unless specifically asked to debug.
-    4. If asked to write code, output valid code blocks (```bash, ```python, etc).
-    5. Be concise and helpful."
+    # Inject Long-Term Memory
+    if [ -f "$MEMORY_FILE" ] && [ -s "$MEMORY_FILE" ]; then
+        context+="\nLONG-TERM MEMORY (Things you learned previously):\n"
+        context+=$(cat "$MEMORY_FILE")
+        context+="\n"
+    fi
 
     echo "$context"
 }
 
-# =============================
-# AI Logic
-# =============================
-
 init_chat() {
-    # Initialize history with system prompt
     local sys_prompt=$(get_system_context)
     jq -n --arg role "user" --arg text "$sys_prompt" \
        '{contents: [{role: $role, parts: [{text: $text}]}]}' > "$HISTORY_FILE"
 }
 
+# =============================
+# Action Handler
+# =============================
+
+handle_ai_actions() {
+    local ai_response="$1"
+    local needs_refresh=false
+    
+    # 1. Handle Auto-Memory (The >>MEMORY: tag)
+    # We use grep to find lines starting with >>MEMORY:
+    if echo "$ai_response" | grep -q ">>MEMORY:"; then
+        # Extract the text after the tag
+        local memories=$(echo "$ai_response" | grep -o ">>MEMORY: .*" | sed 's/>>MEMORY: //')
+        
+        # Save to file
+        echo "$memories" >> "$MEMORY_FILE"
+        
+        # Visual indicator that memory was updated (Subtle)
+        echo -e "${GRAY}[$(get_time)] 🧠 Memory Updated: $memories${NC}"
+        needs_refresh=true
+    fi
+
+    # 2. Handle VM Actions
+    if echo "$ai_response" | grep -q "ACTION: CREATE"; then
+        echo -e "${YELLOW}[$(get_time)] Launching Creation Wizard...${NC}"
+        create_new_vm
+        needs_refresh=true
+    fi
+
+    if echo "$ai_response" | grep -q "ACTION: STOP"; then
+        local vm_name=$(echo "$ai_response" | grep -o "ACTION: STOP .*" | awk '{print $3}')
+        echo -e "${YELLOW}[$(get_time)] Stopping VM: $vm_name...${NC}"
+        stop_vm "$vm_name"
+        needs_refresh=true
+    fi
+
+    if echo "$ai_response" | grep -q "ACTION: EDIT"; then
+        local vm_name=$(echo "$ai_response" | grep -o "ACTION: EDIT .*" | awk '{print $3}')
+        echo -e "${YELLOW}[$(get_time)] Editing VM: $vm_name...${NC}"
+        edit_vm_config "$vm_name"
+        needs_refresh=true
+    fi
+
+    if echo "$ai_response" | grep -q "ACTION: INFO"; then
+        local vm_name=$(echo "$ai_response" | grep -o "ACTION: INFO .*" | awk '{print $3}')
+        show_vm_info "$vm_name"
+    fi
+
+    # If memory or VM state changed, refresh the system prompt
+    if [ "$needs_refresh" = true ]; then
+        init_chat
+    fi
+}
+
 chat_with_leo() {
     local user_input="$1"
     
-    # 1. Append User Input to History
-    # We act as if the system prompt was the first "user" message to set context (Gemini API quirk)
-    # Now we add the actual user request.
     local temp_hist=$(mktemp)
     jq --arg text "$user_input" \
        '.contents += [{role: "user", parts: [{text: $text}]}]' \
        "$HISTORY_FILE" > "$temp_hist" && mv "$temp_hist" "$HISTORY_FILE"
 
-    echo -e "${PURPLE}LEO is thinking...${NC}"
+    echo -e "${PURPLE}[$(get_time)] LEO is thinking...${NC}"
 
-    # 2. Call Gemini API
-    local response=$(curl -s -X POST "https://generativelanguage.googleapis.com/models/$MODEL:generateContent?key=$GEMINI_API_KEY" \
+    local response=$(curl -s -X POST "$API_URL/$MODEL:generateContent?key=$GEMINI_API_KEY" \
         -H "Content-Type: application/json" \
         -d @$HISTORY_FILE)
 
-    # 3. Check for Curl Errors
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}Connection failed.${NC}"
-        return
-    fi
-
-    # 4. Parse Response
     local error_msg=$(echo "$response" | jq -r '.error.message // empty')
     if [ -n "$error_msg" ]; then
-        echo -e "${RED}API Error: $error_msg${NC}"
+        echo -e "${RED}[$(get_time)] API Error: $error_msg${NC}"
         return
     fi
 
-    local ai_text=$(echo "$response" | jq -r '.candidates[0].content.parts[0].text')
+    local ai_text=$(echo "$response" | jq -r '.candidates[0].content.parts[0].text // empty')
     
-    # 5. Display Response
-    echo -e "\r${GREEN}LEO AI:${NC}"
-    echo -e "$ai_text"
+    if [ -z "$ai_text" ]; then
+         echo -e "${RED}[$(get_time)] LEO returned no content.${NC}"
+         return
+    fi
+
+    # Display Response
+    # We pipe through sed to remove the internal ACTION lines AND the >>MEMORY lines
+    # so the user sees a clean response.
+    echo -e "\r${GREEN}[$(get_time)] LEO AI:${NC}"
+    echo -e "$ai_text" | sed '/ACTION:/d' | sed '/>>MEMORY:/d'
     echo ""
 
-    # 6. Update History with AI Response
-    # Note: Gemini expects turns: user -> model -> user -> model
+    handle_ai_actions "$ai_text"
+
     jq --arg text "$ai_text" \
        '.contents += [{role: "model", parts: [{text: $text}]}]' \
        "$HISTORY_FILE" > "$temp_hist" && mv "$temp_hist" "$HISTORY_FILE"
-
-    # 7. Check for Executable Code Blocks
-    extract_and_offer_execution "$ai_text"
-}
-
-extract_and_offer_execution() {
-    local text="$1"
-    # Extract content between ```bash and ``` or ```sh and ```
-    local code_block=$(echo "$text" | sed -n '/^```\(bash\|sh\)/,/^```/ p' | sed '1d;$d')
-
-    if [ -n "$code_block" ]; then
-        echo -e "${YELLOW}--------------------------------------------------${NC}"
-        echo -e "${YELLOW}LEO detected a script/command in the response.${NC}"
-        echo -e "${CYAN}Command preview:${NC}"
-        echo "$code_block"
-        echo -e "${YELLOW}--------------------------------------------------${NC}"
-        
-        read -p "Do you want to EXECUTE this now? (y/N): " exec_choice
-        if [[ "$exec_choice" =~ ^[Yy]$ ]]; then
-            echo -e "${BLUE}Executing...${NC}"
-            eval "$code_block"
-            echo -e "${BLUE}Execution finished.${NC}"
-        fi
-    fi
 }
 
 # =============================
@@ -209,43 +248,53 @@ extract_and_offer_execution() {
 # =============================
 
 main() {
-    check_deps
+    load_vm_functions
     get_api_key
     display_header
     init_chat
 
     while true; do
-        read -p "$(echo -e "${CYAN}[YOU] > ${NC}")" user_input
+        read -p "$(echo -e "${GRAY}[$(get_time)]${NC} ${CYAN}[YOU] > ${NC}")" user_input
         
-        # Handle Exits
         if [[ "$user_input" =~ ^(exit|quit|bye|logout)$ ]]; then
-            echo -e "${BLUE}LEO: Goodbye! Happy coding.${NC}"
-            rm -f "$HISTORY_FILE"
+            echo -e "${BLUE}LEO: Goodbye!${NC}"
             break
         fi
 
-        # Handle Empty Input
         if [ -z "$user_input" ]; then
             continue
         fi
 
-        # Handle specific "run menu" shortcut
+        # Menu Shortcuts
         if [[ "$user_input" == "menu" ]] || [[ "$user_input" == "vm" ]]; then
              if [ -f "./vm.sh" ]; then
                  ./vm.sh
-                 display_header # Redraw header after vm.sh closes
-                 continue
-             else
-                 echo -e "${RED}vm.sh not found in current directory.${NC}"
+                 display_header
                  continue
              fi
+        fi
+
+        # Memory Management
+        if [[ "$user_input" == "mem" ]]; then
+             echo -e "${YELLOW}=== LEO'S AUTO-MEMORY ===${NC}"
+             if [ -f "$MEMORY_FILE" ]; then
+                 cat "$MEMORY_FILE"
+                 echo -e "\n${YELLOW}To clear, type: clear mem${NC}"
+             else
+                 echo "Memory is empty."
+             fi
+             continue
+        fi
+
+        if [[ "$user_input" == "clear mem" ]]; then
+             rm -f "$MEMORY_FILE"
+             echo -e "${RED}Memory wiped.${NC}"
+             init_chat
+             continue
         fi
 
         chat_with_leo "$user_input"
     done
 }
-
-# Trap interrupts
-trap 'echo -e "\n${BLUE}LEO Shutting down...${NC}"; rm -f "$HISTORY_FILE"; exit 0' SIGINT SIGTERM
 
 main
