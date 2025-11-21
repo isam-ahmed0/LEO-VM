@@ -10,7 +10,7 @@ set -euo pipefail
 API_KEY_FILE="$HOME/.leo_ai_key"
 VM_DIR="${VM_DIR:-$HOME/vms}"
 HISTORY_FILE="/tmp/leo_chat_history.json"
-MODEL="gemini-1.5-pro-latest" # Using 1.5 Pro (High capability)
+MODEL="gemini-2.5-pro-latest" # Using 1.5 Pro (High capability)
 
 # Colors
 RED='\033[0;31m'
