@@ -115,7 +115,7 @@ get_system_context() {
     fi
 
     context+="\nINSTRUCTIONS FOR VM MANAGEMENT:
-    1. If the user wants to START, STOP, or CREATE a VM, advise them to run the menu command: ./vm.sh
+    1. If the user wants to START a vm advise them to use there menu command becuz there has 2-3 menu commands specific by theres vps functions.
     2. Specifically, tell them: 'Run ./vm.sh and choose option 2 to start your VM.'
     3. Do NOT try to run raw qemu commands unless specifically asked to debug.
     4. If asked to write code, output valid code blocks (```bash, ```python, etc).
