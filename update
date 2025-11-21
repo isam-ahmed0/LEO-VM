@@ -1,0 +1,11 @@
+#!/bin/bash
+
+# Delete old
+echo "Deleting old..."
+rm -r LEO-VM
+
+# Update
+echo "updating..."
+git clone https://github.com/isam-ahmed0/LEO-VM.git
+
+echo "LEO-VM up-to-date!"
