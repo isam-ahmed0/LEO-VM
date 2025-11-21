@@ -5,12 +5,16 @@
 # Feature: AUTO-MEMORY & VM Management
 # =================================================
 
+# Get the directory where this script is located
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+
 # Configuration
 API_KEY_FILE="$HOME/.leo_ai_key"
 VM_DIR="${VM_DIR:-$HOME/vms}"
 HISTORY_FILE="/tmp/leo_chat_history.json"
 MEMORY_FILE="$HOME/.leo_memory.txt"
-VM_SCRIPT="./vm.sh"
+# FIXED: Finds vm.sh in the same folder as ai.sh
+VM_SCRIPT="$SCRIPT_DIR/vm.sh"
 
 # === USER CONFIGURATION ===
 MODEL="gemini-2.5-pro"
@@ -27,17 +31,36 @@ GRAY='\033[0;90m'
 NC='\033[0m' # No Color
 
 # =============================
-# Library Loading
+# Library Loading (FIXED)
 # =============================
 load_vm_functions() {
     if [ -f "$VM_SCRIPT" ]; then
-        sed '$d' "$VM_SCRIPT" > /tmp/leo_vm_lib.sh
+        # Create a clean library version of vm.sh
+        # 1. Comment out the main_menu call so it doesn't start the menu
+        # 2. Comment out traps so it doesn't kill the AI on exit
+        # 3. Comment out check_dependencies to avoid noise
+        grep -v "^set -euo pipefail" "$VM_SCRIPT" | \
+        sed 's/^\s*main_menu/# main_menu/g' | \
+        sed 's/^\s*trap /# trap /g' | \
+        sed 's/^\s*check_dependencies/# check_dependencies/g' \
+        > /tmp/leo_vm_lib.sh
+        
+        # Source the functions safely
         set +e
-        source /tmp/leo_vm_lib.sh 2>/dev/null
+        source /tmp/leo_vm_lib.sh
         set -e
+        
+        # Verify if it worked
+        if ! command -v stop_vm &> /dev/null; then
+             echo -e "${RED}[ERROR] Failed to load VM functions from $VM_SCRIPT.${NC}"
+             echo "Make sure vm.sh defines a function called 'stop_vm'."
+        fi
+        
+        # Set cleanup trap for AI
         trap 'rm -f "$HISTORY_FILE" /tmp/leo_vm_lib.sh; echo -e "\n${BLUE}LEO Shutting down...${NC}"; exit 0' SIGINT SIGTERM EXIT
     else
-        echo -e "${RED}[WARN] vm.sh not found. VM management features disabled.${NC}"
+        echo -e "${RED}[ERROR] vm.sh not found at: $VM_SCRIPT${NC}"
+        echo -e "${YELLOW}Please ensure vm.sh is in the same folder as ai.sh${NC}"
     fi
 }
 
@@ -59,7 +82,7 @@ display_header() {
 888  ,d 888 ",d  Y888 888P  
 888,d88 888,d88   "88 88"
 
-      BY ISAM AHMED
+BY ISAM AHMED
 ========================================================================
 EOF
     echo -e "${CYAN}Powered by Google Gemini Pro ($MODEL)${NC}"
@@ -86,11 +109,11 @@ get_api_key() {
 }
 
 # =============================
-# AI Context & Auto-Memory Logic
+# AI Context & Auto-Memory
 # =============================
 
 get_system_context() {
-    local context="You are LEO AI, an advanced VM Manager Assistant with AUTO-MEMORY. 
+    local context="You are LEO AI, an advanced VM Manager Assistant. 
     Current User: $(whoami)
     
     CAPABILITIES:
@@ -102,13 +125,8 @@ get_system_context() {
     2. **ACTIONS**: Output specific ACTION COMMANDS alone on a new line.
     
     *** AUTO-MEMORY PROTOCOL ***
-    You must actively listen for user preferences, names, configurations, or specific instructions.
-    If the user mentions a fact that should be remembered for future sessions, append this tag to the end of your response:
+    If the user mentions a fact/preference to remember, append this tag to the response:
     >>MEMORY: [The fact to be saved]
-    
-    Example:
-    User: 'My main server IP is 192.168.1.50'
-    You: 'Understood. >>MEMORY: Main server IP is 192.168.1.50'
     
     ACTION COMMANDS:
     - To create a VM:       ACTION: CREATE
@@ -129,12 +147,14 @@ get_system_context() {
                 if pgrep -f "qemu-system-x86_64.*$vm" >/dev/null; then status="RUNNING"; fi
                 context+=" - $vm | OS: $OS_TYPE | IP/Port: $SSH_PORT | Status: $status\n"
             done
+        else
+            context+="No VMs found.\n"
         fi
     fi
 
     # Inject Long-Term Memory
     if [ -f "$MEMORY_FILE" ] && [ -s "$MEMORY_FILE" ]; then
-        context+="\nLONG-TERM MEMORY (Things you learned previously):\n"
+        context+="\nLONG-TERM MEMORY:\n"
         context+=$(cat "$MEMORY_FILE")
         context+="\n"
     fi
@@ -156,16 +176,10 @@ handle_ai_actions() {
     local ai_response="$1"
     local needs_refresh=false
     
-    # 1. Handle Auto-Memory (The >>MEMORY: tag)
-    # We use grep to find lines starting with >>MEMORY:
+    # 1. Handle Auto-Memory
     if echo "$ai_response" | grep -q ">>MEMORY:"; then
-        # Extract the text after the tag
         local memories=$(echo "$ai_response" | grep -o ">>MEMORY: .*" | sed 's/>>MEMORY: //')
-        
-        # Save to file
         echo "$memories" >> "$MEMORY_FILE"
-        
-        # Visual indicator that memory was updated (Subtle)
         echo -e "${GRAY}[$(get_time)] 🧠 Memory Updated: $memories${NC}"
         needs_refresh=true
     fi
@@ -173,30 +187,45 @@ handle_ai_actions() {
     # 2. Handle VM Actions
     if echo "$ai_response" | grep -q "ACTION: CREATE"; then
         echo -e "${YELLOW}[$(get_time)] Launching Creation Wizard...${NC}"
-        create_new_vm
-        needs_refresh=true
+        if command -v create_new_vm &>/dev/null; then
+            create_new_vm
+            needs_refresh=true
+        else
+            echo -e "${RED}[ERROR] Function 'create_new_vm' not found.${NC}"
+        fi
     fi
 
     if echo "$ai_response" | grep -q "ACTION: STOP"; then
         local vm_name=$(echo "$ai_response" | grep -o "ACTION: STOP .*" | awk '{print $3}')
         echo -e "${YELLOW}[$(get_time)] Stopping VM: $vm_name...${NC}"
-        stop_vm "$vm_name"
-        needs_refresh=true
+        if command -v stop_vm &>/dev/null; then
+            stop_vm "$vm_name"
+            needs_refresh=true
+        else
+             echo -e "${RED}[ERROR] Function 'stop_vm' not found.${NC}"
+        fi
     fi
 
     if echo "$ai_response" | grep -q "ACTION: EDIT"; then
         local vm_name=$(echo "$ai_response" | grep -o "ACTION: EDIT .*" | awk '{print $3}')
         echo -e "${YELLOW}[$(get_time)] Editing VM: $vm_name...${NC}"
-        edit_vm_config "$vm_name"
-        needs_refresh=true
+        if command -v edit_vm_config &>/dev/null; then
+            edit_vm_config "$vm_name"
+            needs_refresh=true
+        else
+            echo -e "${RED}[ERROR] Function 'edit_vm_config' not found.${NC}"
+        fi
     fi
 
     if echo "$ai_response" | grep -q "ACTION: INFO"; then
         local vm_name=$(echo "$ai_response" | grep -o "ACTION: INFO .*" | awk '{print $3}')
-        show_vm_info "$vm_name"
+        if command -v show_vm_info &>/dev/null; then
+            show_vm_info "$vm_name"
+        else
+            echo -e "${RED}[ERROR] Function 'show_vm_info' not found.${NC}"
+        fi
     fi
 
-    # If memory or VM state changed, refresh the system prompt
     if [ "$needs_refresh" = true ]; then
         init_chat
     fi
@@ -229,9 +258,7 @@ chat_with_leo() {
          return
     fi
 
-    # Display Response
-    # We pipe through sed to remove the internal ACTION lines AND the >>MEMORY lines
-    # so the user sees a clean response.
+    # Display Response (Hide internal tags)
     echo -e "\r${GREEN}[$(get_time)] LEO AI:${NC}"
     echo -e "$ai_text" | sed '/ACTION:/d' | sed '/>>MEMORY:/d'
     echo ""
@@ -265,16 +292,14 @@ main() {
             continue
         fi
 
-        # Menu Shortcuts
         if [[ "$user_input" == "menu" ]] || [[ "$user_input" == "vm" ]]; then
-             if [ -f "./vm.sh" ]; then
-                 ./vm.sh
+             if [ -f "$VM_SCRIPT" ]; then
+                 "$VM_SCRIPT"
                  display_header
                  continue
              fi
         fi
 
-        # Memory Management
         if [[ "$user_input" == "mem" ]]; then
              echo -e "${YELLOW}=== LEO'S AUTO-MEMORY ===${NC}"
              if [ -f "$MEMORY_FILE" ]; then
