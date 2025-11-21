@@ -13,6 +13,7 @@ API_KEY_FILE="$HOME/.leo_ai_key"
 VM_DIR="${VM_DIR:-$HOME/vms}"
 HISTORY_FILE="/tmp/leo_chat_history.json"
 MEMORY_FILE="$HOME/.leo_memory.txt"
+# Point exactly to vm.sh in the same directory
 VM_SCRIPT="$SCRIPT_DIR/vm.sh"
 
 # === USER CONFIGURATION ===
@@ -30,16 +31,21 @@ GRAY='\033[0;90m'
 NC='\033[0m' # No Color
 
 # =============================
-# Library Loading (Robust)
+# Library Loading (FIXED & ROBUST)
 # =============================
 load_vm_functions() {
     if [ -f "$VM_SCRIPT" ]; then
         # We perform 'surgery' on vm.sh to make it a safe library.
-        # We strip traps and main execution logic.
+        # 1. Remove 'set -euo pipefail' so source doesn't crash on minor errors
+        # 2. Disable 'trap' so vm.sh doesn't close LEO on exit
+        # 3. Disable 'main_menu' and 'check_dependencies' CALLS only (using strict regex)
+        #    The regex [[:space:]]*$ ensures we match the call "main_menu" 
+        #    but NOT the definition "main_menu() {"
+        
         grep -v "^set -euo pipefail" "$VM_SCRIPT" | \
-        sed 's/^trap cleanup EXIT/# trap cleanup EXIT/g' | \
-        sed 's/^check_dependencies/# check_dependencies/g' | \
-        sed 's/^main_menu/# main_menu/g' | \
+        sed 's/^trap cleanup EXIT/# trap cleanup EXIT/' | \
+        sed 's/^main_menu[[:space:]]*$/# main_menu/' | \
+        sed 's/^check_dependencies[[:space:]]*$/# check_dependencies/' | \
         sed 's/if \[\[ "${BASH_SOURCE\[0\]}" == "${0}" \]\]; then/if false; then/g' \
         > /tmp/leo_vm_lib.sh
         
@@ -48,15 +54,18 @@ load_vm_functions() {
         source /tmp/leo_vm_lib.sh
         set -e
         
+        # Verify that critical functions loaded
         if ! command -v stop_vm &> /dev/null; then
-             echo -e "${RED}[ERROR] Failed to load VM functions.${NC}"
+             echo -e "${RED}[ERROR] Failed to load VM functions from vm.sh.${NC}"
+             echo "Debug: Ensure your vm.sh has a function named 'stop_vm'."
              exit 1
         fi
         
-        # Restore LEO's trap
+        # Restore LEO's trap (in case vm.sh overrode it)
         trap 'rm -f "$HISTORY_FILE" /tmp/leo_vm_lib.sh; echo -e "\n${BLUE}LEO Shutting down...${NC}"; exit 0' SIGINT SIGTERM EXIT
     else
         echo -e "${RED}[ERROR] vm.sh not found at: $VM_SCRIPT${NC}"
+        echo "Please ensure ai.sh and vm.sh are in the same folder."
         exit 1
     fi
 }
@@ -91,6 +100,9 @@ get_api_key() {
     else
         echo -e "${YELLOW}Welcome to LEO AI.${NC}"
         read -p "Enter your Gemini API Key: " GEMINI_API_KEY
+        if [ -z "$GEMINI_API_KEY" ]; then
+             echo -e "${RED}API Key is required.${NC}"; exit 1
+        fi
         echo "$GEMINI_API_KEY" > "$API_KEY_FILE"
         chmod 600 "$API_KEY_FILE"
     fi
@@ -128,10 +140,10 @@ get_system_context() {
         local vm_list=$(find "$VM_DIR" -name "*.conf" -exec basename {} .conf \; 2>/dev/null)
         if [ -n "$vm_list" ]; then
             for vm in $vm_list; do
-                # We assume functions are loaded, use is_vm_running logic manually
+                # Check running status
                 local status="STOPPED"
                 if pgrep -f "qemu-system-x86_64.*$vm" >/dev/null; then status="RUNNING"; fi
-                # Read config strictly for context
+                # Read config for info
                 source "$VM_DIR/$vm.conf" 2>/dev/null || true
                 context+=" - $vm | OS: $OS_TYPE | Port: $SSH_PORT | Status: $status\n"
             done
@@ -226,10 +238,16 @@ chat_with_leo() {
         -H "Content-Type: application/json" \
         -d @$HISTORY_FILE)
 
+    local error_msg=$(echo "$response" | jq -r '.error.message // empty')
+    if [ -n "$error_msg" ]; then
+        echo -e "${RED}[$(get_time)] API Error: $error_msg${NC}"
+        return
+    fi
+
     local ai_text=$(echo "$response" | jq -r '.candidates[0].content.parts[0].text // empty')
     
     if [ -z "$ai_text" ]; then
-         echo -e "${RED}[$(get_time)] Error: No response or API error.${NC}"
+         echo -e "${RED}[$(get_time)] No response from LEO.${NC}"
          return
     fi
 
@@ -262,13 +280,14 @@ main() {
             break
         fi
 
-        if [[ "$user_input" == "menu" ]]; then
-             if [ -f "$VM_SCRIPT" ]; then "$VM_SCRIPT"; display_header; continue; fi
+        if [[ "$user_input" == "menu" ]] || [[ "$user_input" == "vm" ]]; then
+             if [ -f "$VM_SCRIPT" ]; then "$VM_SCRIPT"; display_header; init_chat; continue; fi
         fi
 
         if [[ "$user_input" == "mem" ]]; then
-             if [ -f "$MEMORY_FILE" ]; then cat "$MEMORY_FILE"; else echo "Memory Empty"; fi
-             continue
+             echo -e "${YELLOW}=== MEMORY ===${NC}"
+             if [ -f "$MEMORY_FILE" ]; then cat "$MEMORY_FILE"; else echo "Empty"; fi
+             echo; continue
         fi
 
         if [ -n "$user_input" ]; then
