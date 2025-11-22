@@ -1,8 +1,9 @@
 #!/bin/bash
 # ==============================================================================
-# LEO AI v2.0 - AUTOMOUS AGENT
+# LEO AI v2.1 - AUTONOMOUS AGENT
 # Powered by Gemini Pro
 # Capabilities: Filesystem Access, Self-Mod, Web, Plugins, VM Management
+# UI: Improved Timing & Animations
 # ==============================================================================
 
 # --- Configuration ---
@@ -15,7 +16,6 @@ TARGET_DIRS="$SCRIPT_DIR/isam $SCRIPT_DIR/LEO-VM"
 
 # === UPDATED CONFIGURATION ===
 MODEL="gemini-2.5-pro"
-# Using v1 endpoint as requested
 API_URL="https://generativelanguage.googleapis.com/v1/models"
 
 # Colors & Styling
@@ -81,31 +81,29 @@ get_system_prompt() {
     AVAILABLE TOOLS:
     
     1. READ_FILE <path>
-       - Read contents of any file in isam/, LEO-VM/, or the current directory.
+       - Read contents of any file.
     
     2. WRITE_FILE <path>
        <content>
        END_WRITE_FILE
-       - Create or Overwrite a file. Used for scripting, fixing config, or SELF-MODIFICATION.
+       - Create or Overwrite a file. 
     
     3. LIST_FILES <path>
        - List files in a directory.
     
     4. EXECUTE_CMD <command>
-       - Run a bash command. Use with caution.
+       - Run a bash command.
     
     5. WEB_SEARCH <query>
-       - Search the web for real-time information.
+       - Search the web.
     
     6. VM_ACTION <action> <vm_name>
        - Actions: START, STOP, CREATE, INFO, EDIT.
        
     RULES:
-    1. If the user asks to fix a file, READ it first, then WRITE it back with fixes.
-    2. If the user asks to fix 'ai.sh' (yourself), be extremely careful not to break JSON syntax.
-    3. To run a plugin, just use EXECUTE_CMD if it's a script, or call its function.
-    4. Always 'Thinking' is automatic, do not type 'Thinking...'.
-    5. Be FAST and concise.
+    1. If the user asks to fix 'ai.sh' (yourself), be extremely careful.
+    2. To run a plugin, just use EXECUTE_CMD if it's a script.
+    3. Be FAST and concise.
 
     LOADED PLUGINS:
     $PLUGIN_CONTEXT
@@ -118,37 +116,58 @@ init_history() {
 }
 
 # ==============================================================================
-# 3. Tool Logic ( The Hands )
+# 3. UI & Animation Logic (Improved)
 # ==============================================================================
 
-# Spinner Animation
+# Typewriter effect for AI output
+type_effect() {
+    local text="$1"
+    # Print char by char
+    echo -e "${GREEN}LEO v2:${NC}"
+    # Using python for smoother printing if available, else standard echo
+    if command -v python3 &>/dev/null; then
+        python3 -c "import sys, time; text='''$text'''; 
+for c in text: sys.stdout.write(c); sys.stdout.flush(); time.sleep(0.005)"
+        echo
+    else
+        echo -e "$text"
+    fi
+}
+
+# Better Spinner that clears the line
 thinking_animation() {
     local pid=$1
     local delay=0.1
     local spinstr='|/-\'
-    echo -ne "${PURPLE}LEO is Thinking... "
-    while [ -d /proc/$pid ]; do
+    
+    # Hide Cursor
+    tput civis
+    
+    echo -ne "${PURPLE}LEO v2: Thinking... ${NC}"
+    
+    while kill -0 "$pid" 2>/dev/null; do
         local temp=${spinstr#?}
         printf " [%c]  " "$spinstr"
         local spinstr=$temp${spinstr%"$temp"}
         sleep $delay
         printf "\b\b\b\b\b\b"
     done
-    printf "    \b\b\b\b"
-    echo -ne "${NC}"
+    
+    # Clear the whole line
+    echo -ne "\r\033[K"
+    
+    # Show Cursor
+    tput cnorm
 }
 
 perform_web_search() {
     local query="$1"
     echo -e "${CYAN}[WEB] Searching: $query${NC}"
-    
-    # Try using 'ddgr' (DuckDuckGo CLI) if available
     if command -v ddgr &> /dev/null; then
         ddgr --json -n 3 "$query" 2>/dev/null
     else
-        # Fallback to simple curl (limited) or mock
-        echo "Web search tool 'ddgr' not found. Using basic fallback."
-        echo "Results for $query: (Please install ddgr for real results)"
+        echo "Web search tool 'ddgr' not found. Using fallback."
+        echo "Results for $query: (Install ddgr for real results)"
     fi
 }
 
@@ -197,22 +216,18 @@ parse_and_execute_tools() {
         has_action=true
     fi
 
-    # 4. WRITE_FILE (Multi-line parsing)
+    # 4. WRITE_FILE
     if echo "$input" | grep -q "WRITE_FILE"; then
-        # Extract content between WRITE_FILE and END_WRITE_FILE
         local path=$(echo "$input" | grep "WRITE_FILE" | head -n1 | awk '{print $2}')
         local content=$(echo "$input" | sed -n '/WRITE_FILE/,/END_WRITE_FILE/p' | sed '1d;$d')
         
         echo -e "${RED}[MODIFY] LEO wants to write to: $path${NC}"
         read -p "Allow? (y/n): " choice
         if [[ "$choice" =~ ^[Yy]$ ]]; then
-            # Ensure directory exists
             mkdir -p "$(dirname "$path")"
             echo "$content" > "$path"
             echo -e "${GREEN}File written successfully.${NC}"
             tool_output+="Successfully wrote to $path\n"
-            
-            # If fixing self, re-source
             if [[ "$path" == *"$0"* ]]; then
                 echo -e "${MAGENTA}LEO updated itself. Restarting...${NC}"
                 exec "$0"
@@ -235,14 +250,20 @@ parse_and_execute_tools() {
     if echo "$input" | grep -q "VM_ACTION"; then
         local action_line=$(echo "$input" | grep "VM_ACTION")
         echo -e "${YELLOW}[VM] Executing $action_line${NC}"
-        # Trigger EXECUTE_CMD logic implicitly or handle directly if safe
+        # Trigger EXECUTE_CMD logic implicitly via VM script integration
+        if command -v start_vm &>/dev/null; then
+             # Simple parsing for specific commands
+             if [[ "$action_line" == *"START"* ]]; then start_vm "$(echo "$action_line" | awk '{print $3}')"; fi
+             if [[ "$action_line" == *"STOP"* ]]; then stop_vm "$(echo "$action_line" | awk '{print $3}')"; fi
+             if [[ "$action_line" == *"CREATE"* ]]; then create_new_vm; fi
+        fi
         tool_output+="VM Action Logged.\n"
         has_action=true
     fi
 
     if [ "$has_action" = true ]; then
-        # Recursively feed output back to LEO
         echo -e "${GRAY}Sending Tool Output back to LEO...${NC}"
+        sleep 1 # Wait slightly for user to read
         send_to_leo "Tool execution results:\n$tool_output\nAnalyze these results and continue."
     fi
 }
@@ -254,16 +275,18 @@ send_to_leo() {
     local temp_hist=$(mktemp)
     jq --arg text "$user_input" '.contents += [{"role": "user", "parts": [{"text": $text}]}]' "$HISTORY_FILE" > "$temp_hist" && mv "$temp_hist" "$HISTORY_FILE"
 
-    # Call API in background to allow animation
+    # Start API call in background
     local response_file=$(mktemp)
-    
-    # Updated to use v1 URL and gemini-2.5-pro
     curl -s -X POST "$API_URL/$MODEL:generateContent?key=$GEMINI_API_KEY" \
         -H "Content-Type: application/json" \
         -d @$HISTORY_FILE > "$response_file" &
     
     local curl_pid=$!
+    
+    # Run Animation while waiting
     thinking_animation $curl_pid
+    
+    # Ensure background process is finished
     wait $curl_pid
 
     local response=$(cat "$response_file")
@@ -272,24 +295,29 @@ send_to_leo() {
     # Check Error
     if echo "$response" | grep -q "error"; then
         echo -e "${RED}API Error: $(echo "$response" | jq -r '.error.message')${NC}"
-        # Fallback hint if 2.5 is not found
         if echo "$response" | grep -q "404"; then
-            echo -e "${YELLOW}Hint: 'gemini-2.5-pro' might not be available on your key yet. Try 'gemini-1.5-pro'.${NC}"
+            echo -e "${YELLOW}Hint: 'gemini-2.5-pro' might not be available. Try changing MODEL to 'gemini-1.5-pro'.${NC}"
         fi
         return
     fi
 
     local ai_text=$(echo "$response" | jq -r '.candidates[0].content.parts[0].text // empty')
 
-    # Display AI Response
-    echo -e "\r${GREEN}LEO v2:${NC}"
-    echo -e "$ai_text"
+    # Display AI Response with Typewriter effect
+    if [ -z "$ai_text" ]; then
+        echo -e "${RED}LEO returned no content.${NC}"
+        return
+    fi
+
+    # Small pause before typing starts
+    sleep 0.2
+    type_effect "$ai_text"
     echo -e "${GRAY}------------------------------------------------${NC}"
 
     # Append Model Response to History
     jq --arg text "$ai_text" '.contents += [{"role": "model", "parts": [{"text": $text}]}]' "$HISTORY_FILE" > "$temp_hist" && mv "$temp_hist" "$HISTORY_FILE"
 
-    # Check for tools in the response
+    # Check for tools
     parse_and_execute_tools "$ai_text"
 }
 
@@ -306,7 +334,7 @@ display_header() {
   |  |__|  __|| |  |  |  O  | |  | |
   |_____|____||___/    \___/  |____|
                                     
-      v2.0 - AUTONOMOUS AGENT
+      v2.1 - AUTONOMOUS AGENT
 EOF
     echo -e "${NC}"
     echo -e "System: ${BOLD}$(uname -s)${NC} | Plugins: ${BOLD}$(ls "$PLUGIN_DIR" 2>/dev/null | wc -l)${NC}"
@@ -321,10 +349,10 @@ main() {
     init_history
     display_header
 
-    # Load VM functions if present (Integration)
+    # Load VM functions
     if [ -f "$SCRIPT_DIR/vm.sh" ]; then
-         # Simple surgery to allow calling functions via EXECUTE_CMD
-         sed 's/^trap/#trap/g' "$SCRIPT_DIR/vm.sh" > "/tmp/leo_vm_funcs.sh"
+         # Safe load of VM functions
+         sed 's/^trap/#trap/g' "$SCRIPT_DIR/vm.sh" | sed 's/^main_menu/#main_menu/g' > "/tmp/leo_vm_funcs.sh"
          source "/tmp/leo_vm_funcs.sh" 2>/dev/null
     fi
 
@@ -334,6 +362,7 @@ main() {
 
         if [[ "$user_input" =~ ^(exit|quit|leave)$ ]]; then
             echo -e "${PURPLE}Saving memory and shutting down...${NC}"
+            rm -f /tmp/leo_vm_funcs.sh
             break
         fi
         
@@ -344,6 +373,6 @@ main() {
 }
 
 # Trap for cleanup
-trap 'rm -f /tmp/leo_v2_history.json; echo -e "\n${RED}Force Exit.${NC}"; exit' SIGINT
+trap 'rm -f /tmp/leo_v2_history.json /tmp/leo_vm_funcs.sh; echo -e "\n${RED}Force Exit.${NC}"; exit' SIGINT
 
 main
