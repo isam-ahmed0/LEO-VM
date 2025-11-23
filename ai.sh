@@ -15,10 +15,10 @@ VM_SCRIPT="$SCRIPT_DIR/vm.sh"
 
 # === USER CONFIGURATION ===
 # Using v1 endpoint as requested
-API_URL="https://generativelanguage.googleapis.com/models"
+API_URL="https://generativelanguage.googleapis.com/v1/models"
 # Recommended: gemini-1.5-pro (Most capable public model)
 # Change to gemini-2.5-pro ONLY if you have specific whitelist access.
-MODEL="gemini-1.5-pro" 
+MODEL="gemini-2.5-pro" 
 
 # Directories
 TARGET_DIRS="$SCRIPT_DIR/isam $SCRIPT_DIR/LEO-VM"
