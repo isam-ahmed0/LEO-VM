@@ -1,25 +1,27 @@
 #!/bin/bash
 # ==============================================================================
-# LEO AI v2.6 - AUTONOMOUS AGENT
-# Powered by Gemini Pro
-# Fixes: Prevents crashing to ZSH, Strict Safety, Connection Test
+# LEO AI v3.0 - ULTIMATE AUTONOMOUS AGENT
+# Powered by Gemini 2.5 Pro | API v1
+# Capabilities: Full FS Access, Real VM Integration, Deep Context
 # ==============================================================================
-
-# --- CRITICAL: Prevent script from exiting on minor errors ---
-set +e 
 
 # --- Configuration ---
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 API_KEY_FILE="$HOME/.leo_ai_key"
-HISTORY_FILE="/tmp/leo_v2_history.json"
-PLUGIN_DIR="$SCRIPT_DIR/plugins"
-VM_DIR="$HOME/vms" 
+HISTORY_FILE="/tmp/leo_v3_history.json"
+MEMORY_FILE="$HOME/.leo_memory.txt"
 
-# === API CONFIGURATION ===
+# === USER CONFIGURATION ===
+# User requested gemini-2.5-pro (Ensure your API key has access to this model)
 MODEL="gemini-2.5-pro"
+# User requested v1 endpoint
 API_URL="https://generativelanguage.googleapis.com/v1/models"
 
-# Colors
+# Directories to manage
+TARGET_DIRS="$SCRIPT_DIR/isam $SCRIPT_DIR/LEO-VM"
+PLUGIN_DIR="$SCRIPT_DIR/plugins"
+
+# --- Colors & UI ---
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
@@ -31,78 +33,107 @@ BOLD='\033[1m'
 NC='\033[0m'
 
 # ==============================================================================
-# 1. Initialization
+# 1. System Initialization & Deep Knowledge Ingestion
 # ==============================================================================
 
-init_dirs() {
-    mkdir -p "$PLUGIN_DIR"
-    mkdir -p "$VM_DIR"
+init_system() {
+    mkdir -p "$SCRIPT_DIR/isam" "$SCRIPT_DIR/LEO-VM" "$PLUGIN_DIR"
+    touch "$MEMORY_FILE"
+}
+
+get_time() {
+    date +"%H:%M:%S"
 }
 
 get_api_key() {
     if [ -f "$API_KEY_FILE" ]; then
         GEMINI_API_KEY=$(cat "$API_KEY_FILE")
     else
-        echo -e "${YELLOW}Setup: Enter Google Gemini API Key:${NC}"
+        clear
+        echo -e "${YELLOW}LEO AI v3 Setup${NC}"
+        echo -e "Please enter your Google Gemini API Key:"
         read -s GEMINI_API_KEY
+        if [ -z "$GEMINI_API_KEY" ]; then echo "API Key required."; exit 1; fi
         echo "$GEMINI_API_KEY" > "$API_KEY_FILE"
+        chmod 600 "$API_KEY_FILE"
     fi
 }
 
-# Test connection to ensure script doesn't crash silently
-test_connection() {
-    echo -ne "${GRAY}Initializing Neural Link... ${NC}"
-    local status=$(curl -s -o /dev/null -w "%{http_code}" "https://generativelanguage.googleapis.com/v1/models?key=$GEMINI_API_KEY")
-    if [[ "$status" == "200" ]]; then
-        echo -e "${GREEN}ONLINE${NC}"
+# This gives the AI "Real Knowledge" of your VM script
+ingest_vm_knowledge() {
+    local vm_script="$SCRIPT_DIR/vm.sh"
+    local knowledge=""
+    
+    if [ -f "$vm_script" ]; then
+        # Extract function names from vm.sh
+        local funcs=$(grep "^[a-zA-Z0-9_]\+()" "$vm_script" | sed 's/()//g' | tr '\n' ', ')
+        knowledge="VM MANAGER SCRIPT (vm.sh) FOUND.\n"
+        knowledge+="Available Functions: $funcs\n"
+        knowledge+="You can execute these by writing a script that sources vm.sh or calling ./vm.sh."
     else
-        echo -e "${RED}FAILED (HTTP $status)${NC}"
-        echo -e "${YELLOW}Check your API Key in $API_KEY_FILE${NC}"
-        # We do not exit, we let the user try anyway
+        knowledge="vm.sh NOT FOUND. VM management capabilities limited."
     fi
+    echo "$knowledge"
 }
 
-get_real_vm_status() {
-    local status_output=""
-    if [ -d "$VM_DIR" ]; then
-        local configs=$(find "$VM_DIR" -name "*.conf" 2>/dev/null)
-        if [ -z "$configs" ]; then
-            status_output="No VMs found in $VM_DIR."
-        else
-            for conf in $configs; do
-                local vm_name=$(basename "$conf" .conf)
-                if pgrep -f "qemu-system-x86_64.*$vm_name" >/dev/null; then
-                    status_output+="- VM: $vm_name | Status: RUNNING\n"
-                else
-                    status_output+="- VM: $vm_name | Status: STOPPED\n"
-                fi
-            done
+# This gives the AI "Real Knowledge" of the file system
+ingest_file_structure() {
+    local struct=""
+    for d in $TARGET_DIRS; do
+        if [ -d "$d" ]; then
+            struct+="Directory $d:\n"
+            struct+=$(ls -R "$d" 2>/dev/null | head -n 20) # Limit context size
+            struct+="\n"
         fi
-    else
-        status_output="VM Directory $VM_DIR does not exist."
-    fi
-    echo "$status_output"
+    done
+    echo "$struct"
 }
+
+# ==============================================================================
+# 2. The Brain (Context & Prompting)
+# ==============================================================================
 
 get_system_prompt() {
-    local vm_status=$(get_real_vm_status)
-    local sys_context="You are LEO AI v2.6.
-    USER: $(whoami) | PATH: $SCRIPT_DIR
+    local vm_knowledge=$(ingest_vm_knowledge)
+    local fs_knowledge=$(ingest_file_structure)
+    local memory=$(cat "$MEMORY_FILE")
     
-    *** VM STATUS ***
-    $vm_status
+    local sys_context="You are LEO AI v3, an Autonomous System Administrator.
+    
+    *** REAL-TIME CONTEXT ***
+    Time: $(date)
+    User: $(whoami)
+    Current Dir: $SCRIPT_DIR
+    
+    *** SYSTEM KNOWLEDGE ***
+    $vm_knowledge
+    
+    *** FILE SYSTEM OVERVIEW ***
+    $fs_knowledge
+    
+    *** LONG TERM MEMORY ***
+    $memory
 
-    TOOLS (Output strictly formatted block):
-    1. READ_FILE <path>
-    2. WRITE_FILE <path> \n <content> \n END_WRITE_FILE
-    3. LIST_FILES <path>
-    4. EXECUTE_CMD <command>
-    5. VM_ACTION <action> <vm_name> (START, STOP, CREATE, INFO)
-
-    PROTOCOL:
-    - If tool fails [SYSTEM_ERROR], FIX IT.
-    - Be concise.
+    *** TOOLS & CAPABILITIES ***
+    You are an AGENT. To help the user, you MUST use tools.
+    Output strictly in this format to use a tool:
+    
+    TOOL: <TOOL_NAME> <ARGUMENTS>
+    
+    Available Tools:
+    1. READ_FILE <path>           (Read file content)
+    2. WRITE_FILE <path>          (Create/Overwrite file - Content goes on next lines, end with END_WRITE)
+    3. EXEC_CMD <command>         (Run Bash command - CAUTION)
+    4. SEARCH_WEB <query>         (Search internet)
+    5. MEMORY_SAVE <text>         (Save a fact for later)
+    
+    *** RULES ***
+    1. Do not use markdown for tool commands.
+    2. If fixing ai.sh, be extremely careful with JSON syntax.
+    3. To Manage VMs: Use EXEC_CMD to call './vm.sh' or source it.
+    4. Be concise.
     "
+    # Escape for JSON
     echo "$sys_context" | jq -Rsa .
 }
 
@@ -111,276 +142,243 @@ init_history() {
 }
 
 # ==============================================================================
-# 2. UI BOXES & Animation
+# 3. UI Components (The "Best Timing" & "Better UI")
 # ==============================================================================
 
-box_top() {
-    local color=$1
-    local label=$2
-    echo -e "${color}╭── $label ──────────────────────────────────────${NC}"
-}
-
-box_bottom() {
-    local color=$1
-    echo -e "${color}╰────────────────────────────────────────────────${NC}"
-}
-
-type_effect() {
-    local text="$1"
-    box_top "$GREEN" "LEO v2.6"
-    if command -v python3 &>/dev/null; then
-        python3 -c "import sys, time; text='''$text'''; 
-for c in text: sys.stdout.write(c); sys.stdout.flush(); time.sleep(0.002)"
-        echo
-    else
-        echo -e "$text"
-    fi
-    box_bottom "$GREEN"
-}
-
-start_spinner() {
-    (
-        local spinstr='|/-\'
-        tput civis
-        while true; do
-            local temp=${spinstr#?}
-            printf "${PURPLE} Thinking... [%c]${NC}" "$spinstr"
-            local spinstr=$temp${spinstr%"$temp"}
-            sleep 0.1
-            printf "\r\033[K"
-        done
-    ) &
-    echo $!
-}
-
-stop_spinner() {
+spinner() {
     local pid=$1
-    kill $pid 2>/dev/null
-    wait $pid 2>/dev/null
+    local delay=0.1
+    local spinstr='|/-\'
+    
+    # Hide cursor
+    tput civis
+    
+    echo -ne "${PURPLE}   LEO is Thinking... "
+    while [ -d /proc/$pid ]; do
+        local temp=${spinstr#?}
+        printf " [%c]  " "$spinstr"
+        local spinstr=$temp${spinstr%"$temp"}
+        sleep $delay
+        printf "\b\b\b\b\b\b"
+    done
+    printf "    \b\b\b\b"
+    
+    # Show cursor
     tput cnorm
-    printf "\r\033[K"
+    echo -ne "${NC}"
+}
+
+print_ai_msg() {
+    local msg="$1"
+    echo -e "\r${CYAN}┌── [LEO AI] [$(get_time)]${NC}"
+    echo -e "${CYAN}│${NC} $msg"
+    echo -e "${CYAN}└──────────────────────────────────────────${NC}"
+}
+
+print_user_msg() {
+    echo -e "\n${GREEN}┌── [YOU] [$(get_time)]${NC}"
 }
 
 # ==============================================================================
-# 3. Tool Execution
+# 4. Tool Execution Engine
 # ==============================================================================
 
-parse_and_execute_tools() {
-    local input="$1"
-    local tool_output=""
+execute_tool() {
+    local tool_line="$1"
+    local full_response="$2" # Needed for multi-line WRITE_FILE
+    local output=""
     local has_action=false
 
-    # 1. LIST_FILES
-    if echo "$input" | grep -q "LIST_FILES"; then
-        local path=$(echo "$input" | grep "LIST_FILES" | awk '{print $2}')
-        box_top "$YELLOW" "TOOL: LIST_FILES"
-        if [ -d "$path" ] || [ -f "$path" ]; then
-            local res=$(ls -F "$path" 2>&1)
-            tool_output+="[SUCCESS] LIST_FILES $path:\n$res\n"
-            echo -e "${GRAY}$res${NC}"
-        else
-            tool_output+="[SYSTEM_ERROR] LIST_FILES: $path not found.\n"
-            echo -e "${RED}Not found${NC}"
-        fi
-        box_bottom "$YELLOW"
-        has_action=true
-    fi
-
-    # 2. READ_FILE
-    if echo "$input" | grep -q "READ_FILE"; then
-        local path=$(echo "$input" | grep "READ_FILE" | awk '{print $2}')
-        box_top "$YELLOW" "TOOL: READ_FILE"
-        echo -e "Reading: $path"
+    # --- READ_FILE ---
+    if [[ "$tool_line" == TOOL:\ READ_FILE* ]]; then
+        local path=$(echo "$tool_line" | cut -d' ' -f3-)
+        echo -e "${YELLOW}   >>> Reading: $path${NC}"
         if [ -f "$path" ]; then
-            local res=$(cat "$path")
-            tool_output+="[SUCCESS] READ_FILE $path:\n$res\n"
+            output="FILE CONTENT ($path):\n$(cat "$path")"
         else
-            tool_output+="[SYSTEM_ERROR] READ_FILE: File $path does not exist.\n"
-            echo -e "${RED}File missing${NC}"
+            output="ERROR: File $path not found."
         fi
-        box_bottom "$YELLOW"
         has_action=true
     fi
 
-    # 3. EXECUTE_CMD
-    if echo "$input" | grep -q "EXECUTE_CMD"; then
-        local cmd=$(echo "$input" | sed 's/.*EXECUTE_CMD //')
-        box_top "$RED" "TOOL: EXECUTE_CMD"
-        echo -e "${BOLD}Running:${NC} $cmd"
-        
-        local res
-        if eval "$cmd" > /tmp/leo_cmd_out 2>&1; then
-            res=$(cat /tmp/leo_cmd_out)
-            tool_output+="[SUCCESS] EXECUTE_CMD:\n$res\n"
-        else
-            res=$(cat /tmp/leo_cmd_out)
-            tool_output+="[SYSTEM_ERROR] EXECUTE_CMD failed:\n$res\n"
-            echo -e "${RED}Failed${NC}"
-        fi
-        rm -f /tmp/leo_cmd_out
-        box_bottom "$RED"
+    # --- EXEC_CMD ---
+    if [[ "$tool_line" == TOOL:\ EXEC_CMD* ]]; then
+        local cmd=$(echo "$tool_line" | cut -d' ' -f3-)
+        echo -e "${RED}   >>> Executing: $cmd${NC}"
+        # Automatic safety check? For now, we trust the user since they requested "Real Knowledge"
+        local cmd_out=$(eval "$cmd" 2>&1)
+        output="COMMAND OUTPUT:\n$cmd_out"
         has_action=true
     fi
 
-    # 4. WRITE_FILE
-    if echo "$input" | grep -q "WRITE_FILE"; then
-        local path=$(echo "$input" | grep "WRITE_FILE" | head -n1 | awk '{print $2}')
-        local content=$(echo "$input" | sed -n '/WRITE_FILE/,/END_WRITE_FILE/p' | sed '1d;$d')
+    # --- WRITE_FILE ---
+    if [[ "$tool_line" == TOOL:\ WRITE_FILE* ]]; then
+        local path=$(echo "$tool_line" | cut -d' ' -f3-)
+        # Extract content: Look for lines between the TOOL line and END_WRITE
+        local content=$(echo "$full_response" | sed -n "/TOOL: WRITE_FILE/,/END_WRITE/p" | sed '1d;$d')
         
-        box_top "$RED" "TOOL: WRITE_FILE"
-        echo -e "Target: $path"
+        echo -e "${YELLOW}   >>> Writing to: $path${NC}"
         mkdir -p "$(dirname "$path")"
-        if echo "$content" > "$path"; then
-             tool_output+="[SUCCESS] Written to $path.\n"
-             echo -e "${GREEN}Success${NC}"
-             if [[ "$path" == *"$0"* ]]; then
-                 echo -e "${MAGENTA}LEO updated itself. Restarting...${NC}"
-                 exec "$0"
-             fi
-        else
-             tool_output+="[SYSTEM_ERROR] Write failed.\n"
-             echo -e "${RED}Failed${NC}"
-        fi
-        box_bottom "$RED"
-        has_action=true
-    fi
-
-    # 5. VM Actions
-    if echo "$input" | grep -q "VM_ACTION"; then
-        local action_line=$(echo "$input" | grep "VM_ACTION")
-        local vm_name=$(echo "$action_line" | awk '{print $3}')
-        box_top "$YELLOW" "VM ACTION"
+        echo "$content" > "$path"
+        output="SUCCESS: File $path written."
         
-        if command -v start_vm &>/dev/null; then
-             local cmd_res=""
-             if [[ "$action_line" == *"START"* ]]; then 
-                 echo -e "Starting $vm_name..."
-                 start_vm "$vm_name" && cmd_res="Started" || cmd_res="Failed"
-             elif [[ "$action_line" == *"STOP"* ]]; then 
-                 echo -e "Stopping $vm_name..."
-                 stop_vm "$vm_name" && cmd_res="Stopped" || cmd_res="Failed"
-             elif [[ "$action_line" == *"CREATE"* ]]; then 
-                 echo -e "Launching Wizard..."
-                 create_new_vm && cmd_res="Created"
-             elif [[ "$action_line" == *"INFO"* ]]; then
-                 show_vm_info "$vm_name"
-                 cmd_res="Info shown"
-             fi
-             tool_output+="[SUCCESS] $cmd_res\n"
-        else
-             echo -e "${RED}VM Functions Missing${NC}"
-             tool_output+="[SYSTEM_ERROR] VM functions not loaded.\n"
+        # Self-Correction: If editing ai.sh, warn user
+        if [[ "$path" == *"ai.sh"* ]]; then
+            echo -e "${RED}   !!! LEO MODIFIED ITSELF. RESTART ADVISED. !!!${NC}"
         fi
-        box_bottom "$YELLOW"
         has_action=true
     fi
 
+    # --- MEMORY_SAVE ---
+    if [[ "$tool_line" == TOOL:\ MEMORY_SAVE* ]]; then
+        local fact=$(echo "$tool_line" | cut -d' ' -f3-)
+        echo "$fact" >> "$MEMORY_FILE"
+        echo -e "${GRAY}   >>> Memory Saved.${NC}"
+        output="Memory updated."
+        has_action=true
+    fi
+
+    # --- SEARCH_WEB ---
+    if [[ "$tool_line" == TOOL:\ SEARCH_WEB* ]]; then
+        local query=$(echo "$tool_line" | cut -d' ' -f3-)
+        echo -e "${BLUE}   >>> Searching Web: $query${NC}"
+        # Mocking web search for stability without external deps like ddgr, 
+        # unless you have a search API key. 
+        # For real implementation, verify 'ddgr' exists:
+        if command -v ddgr &> /dev/null; then
+            output=$(ddgr --json -n 3 "$query" 2>&1)
+        else
+            output="ERROR: 'ddgr' tool not installed. Cannot search web."
+        fi
+        has_action=true
+    fi
+
+    # Return result if action was taken
     if [ "$has_action" = true ]; then
-        send_to_leo "SYSTEM_FEEDBACK:\n$tool_output\n\nINSTRUCTION: Analyze output. If error, fix it. If success, inform user."
+        # Feedback loop: Send the tool output back to LEO
+        send_to_leo "SYSTEM_TOOL_OUTPUT:\n$output" "tool_feedback"
     fi
-}
-
-send_to_leo() {
-    local user_input="$1"
-    
-    local temp_hist=$(mktemp)
-    jq --arg text "$user_input" '.contents += [{"role": "user", "parts": [{"text": $text}]}]' "$HISTORY_FILE" > "$temp_hist" && mv "$temp_hist" "$HISTORY_FILE"
-
-    local spinner_pid=$(start_spinner)
-
-    # SYNCHRONOUS API CALL
-    local response_file=$(mktemp)
-    curl -s -X POST "$API_URL/$MODEL:generateContent?key=$GEMINI_API_KEY" \
-        -H "Content-Type: application/json" \
-        -d @$HISTORY_FILE > "$response_file"
-    
-    stop_spinner $spinner_pid
-
-    local response=$(cat "$response_file")
-    rm "$response_file"
-
-    if echo "$response" | grep -q "error"; then
-        echo -e "${RED}API Error: $(echo "$response" | jq -r '.error.message')${NC}"
-        return
-    fi
-
-    local ai_text=$(echo "$response" | jq -r '.candidates[0].content.parts[0].text // empty')
-
-    if [ -z "$ai_text" ]; then
-        echo -e "${RED}Error: Empty response.${NC}"
-        return
-    fi
-
-    type_effect "$ai_text"
-
-    jq --arg text "$ai_text" '.contents += [{"role": "model", "parts": [{"text": $text}]}]' "$HISTORY_FILE" > "$temp_hist" && mv "$temp_hist" "$HISTORY_FILE"
-
-    parse_and_execute_tools "$ai_text"
 }
 
 # ==============================================================================
-# 4. Main Execution
+# 5. Communication Core
+# ==============================================================================
+
+send_to_leo() {
+    local input="$1"
+    local mode="$2" # "user" or "tool_feedback"
+    
+    # Update History
+    local temp_hist=$(mktemp)
+    local role="user"
+    # If it's tool output, we treat it as user input (system info)
+    jq --arg text "$input" --arg role "$role" \
+       '.contents += [{"role": $role, "parts": [{"text": $text}]}]' \
+       "$HISTORY_FILE" > "$temp_hist" && mv "$temp_hist" "$HISTORY_FILE"
+
+    # API Request (Backgrounded for spinner)
+    local response_file=$(mktemp)
+    
+    # Using v1 endpoint as requested
+    curl -s -X POST "$API_URL/$MODEL:generateContent?key=$GEMINI_API_KEY" \
+        -H "Content-Type: application/json" \
+        -d @$HISTORY_FILE > "$response_file" &
+        
+    local curl_pid=$!
+    
+    # Only show spinner if it's a user interaction, distinct visual for tool loops
+    if [ "$mode" != "tool_feedback" ]; then
+        echo ""
+        spinner $curl_pid
+        echo ""
+    else
+        wait $curl_pid
+    fi
+
+    # Read Response
+    local raw_response=$(cat "$response_file")
+    rm "$response_file"
+
+    # Error Handling
+    if echo "$raw_response" | grep -q "error"; then
+        local err_msg=$(echo "$raw_response" | jq -r '.error.message')
+        echo -e "${RED}API Error ($MODEL): $err_msg${NC}"
+        return
+    fi
+
+    # Extract Text
+    local ai_text=$(echo "$raw_response" | jq -r '.candidates[0].content.parts[0].text // empty')
+
+    if [ -z "$ai_text" ]; then
+        echo -e "${RED}LEO returned empty response.${NC}"
+        return
+    fi
+
+    # Update History with AI reply
+    jq --arg text "$ai_text" \
+       '.contents += [{"role": "model", "parts": [{"text": $text}]}]' \
+       "$HISTORY_FILE" > "$temp_hist" && mv "$temp_hist" "$HISTORY_FILE"
+
+    # Display Output (Clean output, remove Tool commands from visual if desired, 
+    # but here we show them for "Real Knowledge" proof)
+    print_ai_msg "$ai_text"
+
+    # Parse Tools
+    # We grep for lines starting with TOOL:
+    while read -r line; do
+        if [[ "$line" == TOOL:* ]]; then
+            execute_tool "$line" "$ai_text"
+        fi
+    done <<< "$ai_text"
+}
+
+# ==============================================================================
+# 6. Main Application Loop
 # ==============================================================================
 
 display_header() {
     clear
-    echo -e "${CYAN}"
     cat << "EOF"
-   __    ____  ___      ___    ____ 
-  |  |  |  __||   \    /   \  |    |
-  |  |__|  __|| |  |  |  O  | |  | |
-  |_____|____||___/    \___/  |____|
-                                    
-      v2.6 - STABLE EDITION
+ _      _____ ____    ___  _ 
+| |    | ____/ __ \  /   || |
+| |    |  __| |  | || | || |
+| |___ | |__| |__| || | || |
+|_____||_____\____/  \___/|_| v3.0
 EOF
-    echo -e "${NC}"
-    echo -e "System: ${BOLD}$(uname -s)${NC} | VM Dir: ${BOLD}$VM_DIR${NC}"
-    echo "------------------------------------------"
+    echo -e "${CYAN}Powered by $MODEL (v1)${NC}"
+    echo -e "${GRAY}Filesystem Access: ENABLED | VM Knowledge: ACTIVE${NC}"
+    echo "---------------------------------------------------"
 }
 
 main() {
-    init_dirs
+    init_system
     get_api_key
+    init_history # Loads system prompt with real VM knowledge
     display_header
-    
-    # TEST CONNECTION
-    test_connection
-
-    init_history
-
-    # Load VM functions safely (Stripping 'set -e')
-    if [ -f "$SCRIPT_DIR/vm.sh" ]; then
-         # Critical: Remove set -euo pipefail to prevent crashing ai.sh
-         sed 's/set -euo pipefail//g' "$SCRIPT_DIR/vm.sh" | \
-         sed 's/^trap/#trap/g' | \
-         sed 's/^main_menu/#main_menu/g' | \
-         sed 's/^check_dependencies/#check_dependencies/g' > "/tmp/leo_vm_funcs.sh"
-         
-         source "/tmp/leo_vm_funcs.sh" 2>/dev/null
-    fi
 
     while true; do
-        echo -e "${CYAN}╭── [$(whoami)@LEO] ──────────────────────────────────╮${NC}"
-        read -p "$(echo -e "${CYAN}│${NC} ➤ ")" user_input
-        echo -e "${CYAN}╰────────────────────────────────────────────────────╯${NC}"
+        # UI: User prompt
+        print_user_msg
+        
+        # This read -p is the "Typing Box". 
+        # It is BLOCKING. It will NOT appear until the previous loop (AI response) is fully done.
+        read -p "╰──➤ " user_input
 
-        if [[ "$user_input" =~ ^(exit|quit|leave)$ ]]; then
-            echo -e "${PURPLE}Shutting down...${NC}"
-            rm -f /tmp/leo_vm_funcs.sh
+        # Logic: Real Exit
+        if [[ "$user_input" =~ ^(exit|quit|bye|leave)$ ]]; then
+            echo -e "${PURPLE}LEO: Shutting down systems. Goodbye.${NC}"
             break
         fi
         
         if [ -z "$user_input" ]; then continue; fi
 
-        # Refresh Context
-        local fresh_prompt=$(get_system_prompt)
-        local temp_hist=$(mktemp)
-        jq --arg text "$fresh_prompt" '.contents[0].parts[0].text = $text' "$HISTORY_FILE" > "$temp_hist" && mv "$temp_hist" "$HISTORY_FILE"
-
-        send_to_leo "$user_input"
+        # Send to AI
+        send_to_leo "$user_input" "user"
     done
 }
 
-trap 'rm -f /tmp/leo_v2_history.json /tmp/leo_vm_funcs.sh; echo -e "\n${RED}Force Exit.${NC}"; exit' SIGINT
+# Cleanup Trap
+trap 'rm -f /tmp/leo_v3_history.json; echo -e "\n${RED}Interrupted.${NC}"; exit' SIGINT
 
+# Start
 main
