@@ -1,9 +1,12 @@
 #!/bin/bash
 # ==============================================================================
-# LEO AI v2.5 - AUTONOMOUS AGENT
+# LEO AI v2.6 - AUTONOMOUS AGENT
 # Powered by Gemini Pro
-# Features: UI BOXES, Strict Blocking, Tool Visualization
+# Fixes: Prevents crashing to ZSH, Strict Safety, Connection Test
 # ==============================================================================
+
+# --- CRITICAL: Prevent script from exiting on minor errors ---
+set +e 
 
 # --- Configuration ---
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
@@ -28,12 +31,35 @@ BOLD='\033[1m'
 NC='\033[0m'
 
 # ==============================================================================
-# 1. Core Logic
+# 1. Initialization
 # ==============================================================================
 
 init_dirs() {
     mkdir -p "$PLUGIN_DIR"
     mkdir -p "$VM_DIR"
+}
+
+get_api_key() {
+    if [ -f "$API_KEY_FILE" ]; then
+        GEMINI_API_KEY=$(cat "$API_KEY_FILE")
+    else
+        echo -e "${YELLOW}Setup: Enter Google Gemini API Key:${NC}"
+        read -s GEMINI_API_KEY
+        echo "$GEMINI_API_KEY" > "$API_KEY_FILE"
+    fi
+}
+
+# Test connection to ensure script doesn't crash silently
+test_connection() {
+    echo -ne "${GRAY}Initializing Neural Link... ${NC}"
+    local status=$(curl -s -o /dev/null -w "%{http_code}" "https://generativelanguage.googleapis.com/v1/models?key=$GEMINI_API_KEY")
+    if [[ "$status" == "200" ]]; then
+        echo -e "${GREEN}ONLINE${NC}"
+    else
+        echo -e "${RED}FAILED (HTTP $status)${NC}"
+        echo -e "${YELLOW}Check your API Key in $API_KEY_FILE${NC}"
+        # We do not exit, we let the user try anyway
+    fi
 }
 
 get_real_vm_status() {
@@ -58,19 +84,9 @@ get_real_vm_status() {
     echo "$status_output"
 }
 
-get_api_key() {
-    if [ -f "$API_KEY_FILE" ]; then
-        GEMINI_API_KEY=$(cat "$API_KEY_FILE")
-    else
-        echo -e "${YELLOW}Setup: Enter Google Gemini API Key:${NC}"
-        read -s GEMINI_API_KEY
-        echo "$GEMINI_API_KEY" > "$API_KEY_FILE"
-    fi
-}
-
 get_system_prompt() {
     local vm_status=$(get_real_vm_status)
-    local sys_context="You are LEO AI v2.5.
+    local sys_context="You are LEO AI v2.6.
     USER: $(whoami) | PATH: $SCRIPT_DIR
     
     *** VM STATUS ***
@@ -98,14 +114,12 @@ init_history() {
 # 2. UI BOXES & Animation
 # ==============================================================================
 
-# Draw top of box
 box_top() {
     local color=$1
     local label=$2
     echo -e "${color}╭── $label ──────────────────────────────────────${NC}"
 }
 
-# Draw bottom of box
 box_bottom() {
     local color=$1
     echo -e "${color}╰────────────────────────────────────────────────${NC}"
@@ -113,8 +127,7 @@ box_bottom() {
 
 type_effect() {
     local text="$1"
-    # Print inside the box logic
-    box_top "$GREEN" "LEO v2.5"
+    box_top "$GREEN" "LEO v2.6"
     if command -v python3 &>/dev/null; then
         python3 -c "import sys, time; text='''$text'''; 
 for c in text: sys.stdout.write(c); sys.stdout.flush(); time.sleep(0.002)"
@@ -161,14 +174,13 @@ parse_and_execute_tools() {
     if echo "$input" | grep -q "LIST_FILES"; then
         local path=$(echo "$input" | grep "LIST_FILES" | awk '{print $2}')
         box_top "$YELLOW" "TOOL: LIST_FILES"
-        echo -e "Listing: $path"
         if [ -d "$path" ] || [ -f "$path" ]; then
             local res=$(ls -F "$path" 2>&1)
             tool_output+="[SUCCESS] LIST_FILES $path:\n$res\n"
             echo -e "${GRAY}$res${NC}"
         else
             tool_output+="[SYSTEM_ERROR] LIST_FILES: $path not found.\n"
-            echo -e "${RED}Error: Not found${NC}"
+            echo -e "${RED}Not found${NC}"
         fi
         box_bottom "$YELLOW"
         has_action=true
@@ -184,7 +196,7 @@ parse_and_execute_tools() {
             tool_output+="[SUCCESS] READ_FILE $path:\n$res\n"
         else
             tool_output+="[SYSTEM_ERROR] READ_FILE: File $path does not exist.\n"
-            echo -e "${RED}Error: Not found${NC}"
+            echo -e "${RED}File missing${NC}"
         fi
         box_bottom "$YELLOW"
         has_action=true
@@ -200,11 +212,10 @@ parse_and_execute_tools() {
         if eval "$cmd" > /tmp/leo_cmd_out 2>&1; then
             res=$(cat /tmp/leo_cmd_out)
             tool_output+="[SUCCESS] EXECUTE_CMD:\n$res\n"
-            echo -e "${GRAY}Output hidden (sent to AI)${NC}"
         else
             res=$(cat /tmp/leo_cmd_out)
             tool_output+="[SYSTEM_ERROR] EXECUTE_CMD failed:\n$res\n"
-            echo -e "${RED}Command Failed${NC}"
+            echo -e "${RED}Failed${NC}"
         fi
         rm -f /tmp/leo_cmd_out
         box_bottom "$RED"
@@ -249,7 +260,7 @@ parse_and_execute_tools() {
                  echo -e "Stopping $vm_name..."
                  stop_vm "$vm_name" && cmd_res="Stopped" || cmd_res="Failed"
              elif [[ "$action_line" == *"CREATE"* ]]; then 
-                 echo -e "Creating VM..."
+                 echo -e "Launching Wizard..."
                  create_new_vm && cmd_res="Created"
              elif [[ "$action_line" == *"INFO"* ]]; then
                  show_vm_info "$vm_name"
@@ -320,7 +331,7 @@ display_header() {
   |  |__|  __|| |  |  |  O  | |  | |
   |_____|____||___/    \___/  |____|
                                     
-      v2.5 - UI EDITION
+      v2.6 - STABLE EDITION
 EOF
     echo -e "${NC}"
     echo -e "System: ${BOLD}$(uname -s)${NC} | VM Dir: ${BOLD}$VM_DIR${NC}"
@@ -330,19 +341,25 @@ EOF
 main() {
     init_dirs
     get_api_key
-    init_history
     display_header
+    
+    # TEST CONNECTION
+    test_connection
 
-    # Load VM functions
+    init_history
+
+    # Load VM functions safely (Stripping 'set -e')
     if [ -f "$SCRIPT_DIR/vm.sh" ]; then
-         sed 's/^trap/#trap/g' "$SCRIPT_DIR/vm.sh" | \
+         # Critical: Remove set -euo pipefail to prevent crashing ai.sh
+         sed 's/set -euo pipefail//g' "$SCRIPT_DIR/vm.sh" | \
+         sed 's/^trap/#trap/g' | \
          sed 's/^main_menu/#main_menu/g' | \
          sed 's/^check_dependencies/#check_dependencies/g' > "/tmp/leo_vm_funcs.sh"
+         
          source "/tmp/leo_vm_funcs.sh" 2>/dev/null
     fi
 
     while true; do
-        # VISUAL INPUT BOX
         echo -e "${CYAN}╭── [$(whoami)@LEO] ──────────────────────────────────╮${NC}"
         read -p "$(echo -e "${CYAN}│${NC} ➤ ")" user_input
         echo -e "${CYAN}╰────────────────────────────────────────────────────╯${NC}"
