@@ -1,8 +1,8 @@
 #!/bin/bash
 # ==============================================================================
-# LEO AI v2.4 - AUTONOMOUS AGENT
+# LEO AI v2.3 - AUTONOMOUS AGENT
 # Powered by Gemini Pro
-# Fixes: STRICT BLOCKING (No overlap), Synchronous API, VM Context
+# Fixes: Input Blocking, Job Waiting, JSON Reliability
 # ==============================================================================
 
 # --- Configuration ---
@@ -28,7 +28,7 @@ BOLD='\033[1m'
 NC='\033[0m'
 
 # ==============================================================================
-# 1. Core Logic & State
+# 1. Core Logic
 # ==============================================================================
 
 init_dirs() {
@@ -70,11 +70,10 @@ get_api_key() {
 
 get_system_prompt() {
     local vm_status=$(get_real_vm_status)
-    # We explicitly tell it NOT to use virsh, but to use VM_ACTION or just trust the status.
-    local sys_context="You are LEO AI v2.4.
+    local sys_context="You are LEO AI v2.3, a System Agent.
     USER: $(whoami) | PATH: $SCRIPT_DIR
     
-    *** REAL-TIME VM STATUS (TRUST THIS) ***
+    *** CURRENT VM STATE ***
     $vm_status
 
     TOOLS (Output strictly formatted block):
@@ -83,11 +82,12 @@ get_system_prompt() {
     3. LIST_FILES <path>
     4. EXECUTE_CMD <command>
     5. VM_ACTION <action> <vm_name>
-       (Use this for VM control. Do NOT use virsh.)
+       (START, STOP, CREATE, INFO)
 
     PROTOCOL:
     - If tool fails [SYSTEM_ERROR], FIX IT.
     - Do not type 'Thinking'.
+    - Be FAST.
     "
     echo "$sys_context" | jq -Rsa .
 }
@@ -97,42 +97,44 @@ init_history() {
 }
 
 # ==============================================================================
-# 2. UI & Animation (Strictly Synchronous)
+# 2. UI & Animation (Blocking)
 # ==============================================================================
 
 type_effect() {
     local text="$1"
     echo -e "${GREEN}LEO v2:${NC}"
-    # Standard echo is faster and safer for blocking issues
-    echo -e "$text"
+    # Python typer for smoothness
+    if command -v python3 &>/dev/null; then
+        python3 -c "import sys, time; text='''$text'''; 
+for c in text: sys.stdout.write(c); sys.stdout.flush(); time.sleep(0.002)"
+        echo
+    else
+        echo -e "$text"
+    fi
 }
 
-# Run animation in background, store PID, return it
-start_spinner() {
-    (
-        local spinstr='|/-\'
-        tput civis
-        while true; do
-            local temp=${spinstr#?}
-            printf "${PURPLE}Thinking... [%c]${NC}" "$spinstr"
-            local spinstr=$temp${spinstr%"$temp"}
-            sleep 0.1
-            printf "\r\033[K"
-        done
-    ) &
-    echo $!
-}
-
-stop_spinner() {
+# Strictly blocking animation
+blocking_wait() {
     local pid=$1
-    kill $pid 2>/dev/null
-    wait $pid 2>/dev/null
-    tput cnorm
-    printf "\r\033[K" # Clean line
+    local spinstr='|/-\'
+    
+    tput civis # Hide cursor
+    
+    # Loop while process exists
+    while kill -0 "$pid" 2>/dev/null; do
+        local temp=${spinstr#?}
+        printf "${PURPLE}LEO v2: Thinking... [%c]${NC}" "$spinstr"
+        local spinstr=$temp${spinstr%"$temp"}
+        sleep 0.1
+        printf "\r\033[K" # Clear line
+    done
+    
+    wait "$pid" # Capture exit code
+    tput cnorm # Show cursor
 }
 
 # ==============================================================================
-# 3. Tool Execution
+# 3. Tool Execution & Error Interception
 # ==============================================================================
 
 parse_and_execute_tools() {
@@ -168,8 +170,7 @@ parse_and_execute_tools() {
 
     # 3. EXECUTE_CMD
     if echo "$input" | grep -q "EXECUTE_CMD"; then
-        # Cleaner regex to remove the command prefix
-        local cmd=$(echo "$input" | sed 's/.*EXECUTE_CMD //')
+        local cmd=$(echo "$input" | grep "EXECUTE_CMD" | sed 's/EXECUTE_CMD //')
         echo -e "${RED}[DANGER] LEO running: ${BOLD}$cmd${NC}"
         
         local res
@@ -230,8 +231,8 @@ parse_and_execute_tools() {
 
     if [ "$has_action" = true ]; then
         echo -e "${GRAY}Analyzing results...${NC}"
-        # RECURSIVE CALL: Block until this finishes
-        send_to_leo "SYSTEM_FEEDBACK:\n$tool_output\n\nINSTRUCTION: Analyze output. If error, fix it. If success, inform user."
+        # RECURSION: This blocks until the analysis is done
+        send_to_leo "SYSTEM_FEEDBACK:\n$tool_output\n\nINSTRUCTION: If [SYSTEM_ERROR], fix it. Else, inform user."
     fi
 }
 
@@ -242,23 +243,22 @@ send_to_leo() {
     local temp_hist=$(mktemp)
     jq --arg text "$user_input" '.contents += [{"role": "user", "parts": [{"text": $text}]}]' "$HISTORY_FILE" > "$temp_hist" && mv "$temp_hist" "$HISTORY_FILE"
 
-    # 2. Start Animation (Background)
-    local spinner_pid=$(start_spinner)
-
-    # 3. Call API (SYNCHRONOUS / BLOCKING)
-    # The script STOPS here until curl finishes. You cannot type.
+    # 2. Call API (Background)
     local response_file=$(mktemp)
     curl -s -X POST "$API_URL/$MODEL:generateContent?key=$GEMINI_API_KEY" \
         -H "Content-Type: application/json" \
-        -d @$HISTORY_FILE > "$response_file"
+        -d @$HISTORY_FILE > "$response_file" &
     
-    # 4. Stop Animation
-    stop_spinner $spinner_pid
+    # 3. BLOCKING WAIT
+    # We capture the PID and strictly wait for it to finish.
+    # The user cannot type during this loop.
+    local curl_pid=$!
+    blocking_wait $curl_pid
 
     local response=$(cat "$response_file")
     rm "$response_file"
 
-    # 5. Error Checking
+    # 4. Error Checking
     if echo "$response" | grep -q "error"; then
         echo -e "${RED}API Error: $(echo "$response" | jq -r '.error.message')${NC}"
         return
@@ -266,20 +266,21 @@ send_to_leo() {
 
     local ai_text=$(echo "$response" | jq -r '.candidates[0].content.parts[0].text // empty')
 
+    # Failsafe: If JSON was valid but text empty, or parser failed
     if [ -z "$ai_text" ]; then
-        echo -e "${RED}[DEBUG] Empty Response. Raw Output:${NC}"
+        echo -e "${RED}[DEBUG] LEO returned no content. Raw response:${NC}"
         echo "$response" | head -n 5
         return
     fi
 
-    # 6. Output
+    # 5. Output & Recursion
     type_effect "$ai_text"
     echo -e "${GRAY}------------------------------------------------${NC}"
 
-    # 7. Update History
+    # Update History with response
     jq --arg text "$ai_text" '.contents += [{"role": "model", "parts": [{"text": $text}]}]' "$HISTORY_FILE" > "$temp_hist" && mv "$temp_hist" "$HISTORY_FILE"
 
-    # 8. Execute Tools (Blocks until done)
+    # Check for tools (This will trigger recursion if tools are found)
     parse_and_execute_tools "$ai_text"
 }
 
@@ -296,7 +297,7 @@ display_header() {
   |  |__|  __|| |  |  |  O  | |  | |
   |_____|____||___/    \___/  |____|
                                     
-      v2.4 - STRICT BLOCKING MODE
+      v2.3 - AUTONOMOUS AGENT
 EOF
     echo -e "${NC}"
     echo -e "System: ${BOLD}$(uname -s)${NC} | VM Dir: ${BOLD}$VM_DIR${NC}"
@@ -320,7 +321,8 @@ main() {
     while true; do
         echo -e "${BLUE}╭── [$(whoami)@LEO]${NC}"
         
-        # The prompt only appears when the previous command chain is DEAD.
+        # This READ command halts the script.
+        # It only runs when the previous send_to_leo (and all recursion) is 100% done.
         read -p "╰──➤ " user_input
 
         if [[ "$user_input" =~ ^(exit|quit|leave)$ ]]; then
@@ -331,7 +333,7 @@ main() {
         
         if [ -z "$user_input" ]; then continue; fi
 
-        # Refresh VM status context before sending
+        # Update System Prompt with latest VM status
         local fresh_prompt=$(get_system_prompt)
         local temp_hist=$(mktemp)
         jq --arg text "$fresh_prompt" '.contents[0].parts[0].text = $text' "$HISTORY_FILE" > "$temp_hist" && mv "$temp_hist" "$HISTORY_FILE"
