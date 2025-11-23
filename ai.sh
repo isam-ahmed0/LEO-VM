@@ -1,8 +1,8 @@
 #!/bin/bash
 # ==============================================================================
-# LEO AI v4.1 - ULTIMATE AUTONOMOUS AGENT
-# Powered by Gemini Pro (v1) | By Isam Ahmed
-# Capabilities: Self-Fix, Plugins, Web, VM Control, Real Knowledge
+# LEO AI v4.2 - ROBUST SELF-EVOLVING AGENT
+# Powered by Gemini Pro (v1)
+# Updates: Auto-chmod fix, Better Syntax Handling
 # ==============================================================================
 
 # --- Configuration ---
@@ -14,10 +14,7 @@ PLUGIN_DIR="$SCRIPT_DIR/plugins"
 VM_SCRIPT="$SCRIPT_DIR/vm.sh"
 
 # === USER CONFIGURATION ===
-# Using v1 endpoint as requested
 API_URL="https://generativelanguage.googleapis.com/v1/models"
-# Recommended: gemini-1.5-pro (Most capable public model)
-# Change to gemini-2.5-pro ONLY if you have specific whitelist access.
 MODEL="gemini-2.5-flash" 
 
 # Directories
@@ -34,7 +31,7 @@ GRAY='\033[0;90m'
 NC='\033[0m'
 
 # ==============================================================================
-# 1. Initialization & Real Knowledge Loading
+# 1. Initialization
 # ==============================================================================
 
 init_system() {
@@ -44,7 +41,6 @@ init_system() {
 
 get_time() { date +"%H:%M:%S"; }
 
-# Loads plugins dynamically
 load_plugins() {
     local p_context=""
     if [ -d "$PLUGIN_DIR" ]; then
@@ -58,18 +54,13 @@ load_plugins() {
     echo "$p_context"
 }
 
-# SAFELY loads vm.sh functions (Surgery Method)
 load_vm_functions() {
     if [ -f "$VM_SCRIPT" ]; then
-        # 1. Strip 'set -e' to prevent crashes
-        # 2. Comment out traps so vm.sh doesn't kill LEO
-        # 3. Comment out direct calls to main_menu
         grep -v "^set -euo pipefail" "$VM_SCRIPT" | \
         sed 's/^trap /# trap /' | \
         sed 's/^main_menu/# main_menu/' | \
         sed 's/^check_dependencies/# check_dependencies/' \
         > "/tmp/leo_vm_safe.sh"
-        
         source "/tmp/leo_vm_safe.sh"
     fi
 }
@@ -87,30 +78,27 @@ get_api_key() {
 }
 
 # ==============================================================================
-# 2. The Brain (System Prompt)
+# 2. System Prompt
 # ==============================================================================
 
 get_system_prompt() {
     local plugins=$(load_plugins)
     local memory=$(cat "$MEMORY_FILE")
-    # Feed actual file structure to AI
     local fs_context=$(ls -R "$SCRIPT_DIR/isam" "$SCRIPT_DIR/LEO-VM" 2>/dev/null | head -n 30)
     
-    local sys_context="You are LEO AI (v4.1), an Autonomous System Administrator by Isam Ahmed.
+    local sys_context="You are LEO AI (v4.2), an Autonomous System Administrator.
     
     *** IDENTITY ***
-    User: $(whoami) | Dir: $SCRIPT_DIR | Time: $(date)
+    User: $(whoami) | Dir: $SCRIPT_DIR
     
     *** REAL-TIME KNOWLEDGE ***
-    VM Manager: DETECTED (Functions loaded)
     Filesystem Preview:
     $fs_context
     
     *** CAPABILITIES ***
     1. SELF-MODIFICATION: You can read 'ai.sh' and overwrite it.
-    2. FILESYSTEM: Read/Write access to isam/ and LEO-VM/.
+    2. FILESYSTEM: Read/Write access.
     3. PLUGINS: $plugins
-    4. WEB: Use SEARCH_WEB tool.
     
     *** TOOL PROTOCOL (Strict Format) ***
     Output tools on a new line.
@@ -121,7 +109,7 @@ get_system_prompt() {
     TOOL: MEMORY_SAVE <fact>
     
     *** RULES ***
-    1. To manage VMs, use: TOOL: EXEC_CMD start_vm <name> (or stop_vm, create_new_vm).
+    1. If you write a bash script or update yourself, I will automatically chmod +x it.
     2. If an error occurs, read the file, analyze, and fix it.
     3. Be concise.
     
@@ -136,7 +124,7 @@ init_history() {
 }
 
 # ==============================================================================
-# 3. Tool Execution Engine
+# 3. Tool Execution Engine (FIXED)
 # ==============================================================================
 
 execute_tool() {
@@ -161,7 +149,6 @@ execute_tool() {
         local cmd=$(echo "$tool_line" | cut -d' ' -f3-)
         echo -e "${RED}   >>> Running: $cmd${NC}"
         
-        # Capture output and error
         local cmd_out
         cmd_out=$(eval "$cmd" 2>&1)
         local exit_code=$?
@@ -169,12 +156,12 @@ execute_tool() {
         if [ $exit_code -eq 0 ]; then
             output="SUCCESS:\n$cmd_out"
         else
-            output="ERROR (Exit Code $exit_code):\n$cmd_out\n\nINSTRUCTION: Analyze error and fix."
+            output="ERROR (Exit Code $exit_code):\n$cmd_out"
         fi
         has_action=true
     fi
 
-    # --- WRITE_FILE ---
+    # --- WRITE_FILE (THE FIX IS HERE) ---
     if [[ "$tool_line" == TOOL:\ WRITE_FILE* ]]; then
         local path=$(echo "$tool_line" | cut -d' ' -f3-)
         # Extract content between TOOL line and END_WRITE
@@ -183,6 +170,13 @@ execute_tool() {
         echo -e "${YELLOW}   >>> Writing: $path${NC}"
         mkdir -p "$(dirname "$path")"
         echo "$content" > "$path"
+        
+        # FIX: Force executable permission for scripts or self
+        if [[ "$path" == *".sh" || "$path" == *"$0"* ]]; then
+            chmod +x "$path"
+            echo -e "${GRAY}   >>> Permissions fixed (+x)${NC}"
+        fi
+        
         output="File written successfully."
         
         # SELF-UPDATE LOGIC
@@ -226,7 +220,7 @@ BY ISAM AHMED
 ========================================================================
 EOF
     echo -e "${CYAN}Powered by $MODEL (v1)${NC}"
-    echo -e "${GRAY}Filesystem: ENABLED | VM Knowledge: ACTIVE${NC}"
+    echo -e "${GRAY}Filesystem: ENABLED | Auto-Chmod: ACTIVE${NC}"
     echo "----------------------------------------------------------"
 }
 
@@ -251,11 +245,9 @@ send_to_leo() {
     local input="$1"
     local mode="$2"
 
-    # Update History
     local temp_hist=$(mktemp)
     jq --arg text "$input" '.contents += [{"role": "user", "parts": [{"text": $text}]}]' "$HISTORY_FILE" > "$temp_hist" && mv "$temp_hist" "$HISTORY_FILE"
 
-    # Call API (Background)
     local response_file=$(mktemp)
     curl -s -X POST "$API_URL/$MODEL:generateContent?key=$GEMINI_API_KEY" \
         -H "Content-Type: application/json" \
@@ -263,7 +255,6 @@ send_to_leo() {
     
     local curl_pid=$!
     
-    # VISUALS: Show spinner only for user input, not internal tool loops
     if [ "$mode" != "tool_feedback" ]; then
         echo ""; spinner $curl_pid; echo ""
     else
@@ -273,7 +264,6 @@ send_to_leo() {
     local raw_response=$(cat "$response_file")
     rm "$response_file"
 
-    # Parse Response
     local ai_text=$(echo "$raw_response" | jq -r '.candidates[0].content.parts[0].text // empty')
     
     if [ -z "$ai_text" ]; then
@@ -282,15 +272,12 @@ send_to_leo() {
         return
     fi
 
-    # Update History
     jq --arg text "$ai_text" '.contents += [{"role": "model", "parts": [{"text": $text}]}]' "$HISTORY_FILE" > "$temp_hist" && mv "$temp_hist" "$HISTORY_FILE"
 
-    # Display AI Response
     echo -e "\r${CYAN}┌── [LEO AI]${NC}"
     echo -e "${CYAN}│${NC} $ai_text"
     echo -e "${CYAN}└──────────────────────────────────────────${NC}"
 
-    # Parse & Execute Tools
     while read -r line; do
         if [[ "$line" == TOOL:* ]]; then
             execute_tool "$line" "$ai_text"
@@ -305,17 +292,16 @@ send_to_leo() {
 main() {
     init_system
     get_api_key
-    load_vm_functions # Safe Load
+    load_vm_functions
     init_history
     display_header
 
     while true; do
-        # User Input (Blocking)
         echo -e "\n${GREEN}┌── [YOU]${NC}"
         read -p "╰──➤ " user_input
 
         if [[ "$user_input" =~ ^(exit|quit|leave)$ ]]; then
-            echo -e "${PURPLE}Saving memory... Goodbye.${NC}"
+            echo -e "${PURPLE}Goodbye.${NC}"
             break
         fi
 
@@ -325,6 +311,5 @@ main() {
     done
 }
 
-# Cleanup
 trap 'rm -f /tmp/leo_v4_history.json /tmp/leo_vm_safe.sh; echo -e "\n${RED}Exiting.${NC}"; exit' SIGINT
 main
